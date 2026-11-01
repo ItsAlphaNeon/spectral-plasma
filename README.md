@@ -1,5 +1,7 @@
 # Spectral Plasma
 
+(This was created for personal use completely by Claude. Its only public for my own convienence.)
+
 Generative plasma wallpapers coloured by real atomic emission spectra. Pick an element, mix several, or paste a NIST line list. Its discrete emission lines become the palette of a glowing, seamlessly looping plasma.
 
 Everything is in one file, `index.html`. Open it in Chrome or Safari. There's no build step or install, and it needs WebGL 2.
