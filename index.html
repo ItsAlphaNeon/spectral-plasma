@@ -316,6 +316,10 @@ body.panel-hidden.idle #showPanel { opacity: 0; }
       <button class="btn xbtn" id="xHtml">Live HTML</button>
     </div>
     <div class="row" style="margin-top:12px">
+      <span class="sub grow">Wallpaper Engine package</span>
+      <select id="weMode"><option value="video" selected>Pre-rendered video</option><option value="live">Live shader</option></select>
+    </div>
+    <div class="row">
       <span class="sub grow">Video frame rate</span>
       <select id="vfps"><option value="24">24 fps</option><option value="30" selected>30 fps</option><option value="60">60 fps</option></select>
     </div>
@@ -336,7 +340,8 @@ body.panel-hidden.idle #showPanel { opacity: 0; }
     <h3>macOS, animated</h3>
     <p>macOS has no built-in way to use your own animated wallpaper. Export <em>Live HTML</em> and open it in a web-page wallpaper app such as Plash, or use the <em>MP4 loop</em> with any video-wallpaper app. The loop is seamless: the last frame leads straight back into the first.</p>
     <h3>Windows, Wallpaper Engine</h3>
-    <p>Unzip the export, then in Wallpaper Engine choose <em>Open Wallpaper › Open from File</em> and pick <code>index.html</code>. Element, form, seed, speed and exposure stay editable in its properties panel, and pasting a settings code there loads any look made in this app. The same HTML also works in Lively Wallpaper.</p>
+    <p><em>Pre-rendered video</em> renders the loop to an H.264 video at the resolution and frame rate above, so Wallpaper Engine only decodes it on the GPU's video engine instead of running the shader. Unzip it into a folder inside <code>wallpaper_engine\projects\myprojects</code> and it shows up in Wallpaper Engine with its title and preview. A longer loop length means the video wraps around less often.</p>
+    <p><em>Live shader</em> renders in real time and stays editable. Unzip it, then in Wallpaper Engine choose <em>Open Wallpaper › Open from File</em> and pick <code>index.html</code>. Element, form, seed, speed and exposure stay editable in its properties panel, and pasting a settings code there loads any look made in this app. The same HTML also works in Lively Wallpaper.</p>
     <h3>Keys</h3>
     <p><kbd>H</kbd> hide controls · <kbd>Space</kbd> pause · <kbd>R</kbd> new seed · <kbd>S</kbd> surprise · <kbd>F</kbd> fullscreen</p>
     <h3>About the data</h3>
@@ -1507,7 +1512,9 @@ const RES = [
   ['5120x2880', 'Studio Display 5K · 5120×2880'],
   ['6016x3384', 'Pro Display XDR 6K · 6016×3384'],
   ['1920x1080', '1080p · 1920×1080'],
+  ['1920x1200', '16:10 · 1920×1200'],
   ['2560x1440', '1440p · 2560×1440'],
+  ['2560x1600', '16:10 · 2560×1600'],
   ['3440x1440', 'Ultrawide · 3440×1440'],
   ['3840x2160', '4K UHD · 3840×2160'],
   ['custom', 'Custom…'],
@@ -1540,10 +1547,17 @@ $('#cw').addEventListener('change', onResChange);
 $('#ch').addEventListener('change', onResChange);
 $('#frame').addEventListener('change', e => { const [w, h] = exportSize(); view.setFrameAspect(e.target.checked ? w / h : null); });
 $('#vfps').addEventListener('change', updateVideoInfo);
+const weMode = $('#weMode');
+try { const saved = localStorage.getItem('sp-we'); if (saved && [...weMode.options].some(o => o.value === saved)) weMode.value = saved; } catch (e) {}
+weMode.addEventListener('change', () => {
+  try { localStorage.setItem('sp-we', weMode.value); } catch (e) {}
+  updateVideoInfo();
+});
 function updateVideoInfo() {
   const [w, h] = exportSize();
   const fps = +$('#vfps').value;
-  $('#vinfo').textContent = `MP4: ${state.loop} s seamless loop, ${Math.round(state.loop * fps)} frames at ${w}×${h}${w * h > 3840 * 2160 ? ' (may be reduced to fit the encoder)' : ''}.`;
+  const what = weMode.value === 'video' ? 'MP4 and Wallpaper Engine video' : 'MP4';
+  $('#vinfo').textContent = `${what}: ${state.loop} s seamless loop, ${Math.round(state.loop * fps)} frames at ${w}×${h}${w * h > 3840 * 2160 ? ' (may be reduced to fit the encoder)' : ''}.`;
 }
 const baseName = s => `spectral-plasma-${sourceLabel(s).tag}-${s.style}-${s.seed}`;
 
@@ -1623,10 +1637,11 @@ const CODECS = [
   { codec: 'vp09.00.51.08', mux: 'vp9' },
   { codec: 'av01.0.12M.08', mux: 'av1' },
 ];
-async function pickEncoder(W, H, fps) {
+async function pickEncoder(W, H, fps, avcOnly) {
   const bitrate = clamp(Math.round(W * H * fps * 0.14), 8e6, 120e6);
   for (const c of CODECS) {
     if (c.maxPx && W * H > c.maxPx) continue;
+    if (avcOnly && c.mux !== 'avc') continue;
     const cfg = { codec: c.codec, width: W, height: H, bitrate, framerate: fps, latencyMode: 'quality' };
     if (c.mux === 'avc') cfg.avc = { format: 'avc' };
     if (c.mux === 'hevc') cfg.hevc = { format: 'hevc' };
@@ -1634,10 +1649,9 @@ async function pickEncoder(W, H, fps) {
   }
   return null;
 }
-$('#xMp4').onclick = () => runJob('Preparing video…', async j => {
-  const s = state;
-  let [W, H] = exportSize();
-  const fps = +$('#vfps').value;
+// Renders one seamless loop of s to a video and resolves to { blob, W, H, ext }.
+// avcOnly restricts the encoder to H.264, the codec Wallpaper Engine plays everywhere.
+async function encodeLoop(j, s, W, H, fps, avcOnly = false) {
   if (!('VideoEncoder' in window)) return recordRealtime(j, s, W, H, fps);
   let M;
   try { M = await loadMuxer(); } catch (e) { toast(e.message + ' Recording in real time instead.'); return recordRealtime(j, s, W, H, fps); }
@@ -1645,10 +1659,10 @@ $('#xMp4').onclick = () => runJob('Preparing video…', async j => {
   const W0 = W, H0 = H;
   for (let f = 1; f > 0.2 && !enc; f *= 0.82) {
     const w = Math.round(W0 * f / 2) * 2, h = Math.round(H0 * f / 2) * 2;
-    enc = await pickEncoder(w, h, fps);
+    enc = await pickEncoder(w, h, fps, avcOnly);
     if (enc) { W = w; H = h; }
   }
-  if (!enc) throw new Error('this browser has no usable video encoder');
+  if (!enc) throw new Error(avcOnly ? 'this browser has no usable H.264 encoder' : 'this browser has no usable video encoder');
   if (W !== W0) toast(`The encoder tops out below ${W0}×${H0}; exporting ${W}×${H}.`);
   const N = Math.round(s.loop * fps);
   const pal = buildPalette(s);
@@ -1690,18 +1704,24 @@ $('#xMp4').onclick = () => runJob('Preparing video…', async j => {
     await encoder.flush();
     if (encErr) throw encErr;
     muxer.finalize();
-    const blob = new Blob([muxer.target.buffer], { type: 'video/mp4' });
-    download(blob, `${baseName(s)}-${W}x${H}-${s.loop}s-${fps}fps.mp4`);
-    toast(`Saved ${s.loop} s loop (${(blob.size / 1048576).toFixed(1)} MB)`);
+    return { blob: new Blob([muxer.target.buffer], { type: 'video/mp4' }), W, H, ext: 'mp4' };
   } finally {
     if (encoder.state !== 'closed') encoder.close();
     r.dispose();
   }
+}
+const megabytes = n => (n / 1048576).toFixed(1) + ' MB';
+$('#xMp4').onclick = () => runJob('Preparing video…', async j => {
+  const s = state, [W0, H0] = exportSize(), fps = +$('#vfps').value;
+  const { blob, W, H, ext } = await encodeLoop(j, s, W0, H0, fps);
+  download(blob, `${baseName(s)}-${W}x${H}-${s.loop}s-${fps}fps.${ext}`);
+  toast(`Saved ${s.loop} s loop (${megabytes(blob.size)})`);
 });
 // Fallback when WebCodecs or the muxer is unavailable: record the canvas in real time.
 async function recordRealtime(j, s, W, H, fps) {
   if (!window.MediaRecorder) throw new Error('this browser cannot record video');
-  W = Math.min(W, 3840); H = Math.round(W * exportSize()[1] / exportSize()[0] / 2) * 2;
+  const aspect = H / W;
+  W = Math.min(W, 3840); H = Math.round(W * aspect / 2) * 2;
   const mime = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'].find(m => MediaRecorder.isTypeSupported(m));
   const glc = document.createElement('canvas');
   glc.width = W; glc.height = H;
@@ -1730,9 +1750,7 @@ async function recordRealtime(j, s, W, H, fps) {
   await stopped;
   r.dispose();
   if (j.cancelled) throw abortErr();
-  const ext = mime.includes('mp4') ? 'mp4' : 'webm';
-  download(new Blob(chunks, { type: mime }), `${baseName(s)}-${W}x${H}-${s.loop}s.${ext}`);
-  toast(`Saved real-time recording (${ext.toUpperCase()})`);
+  return { blob: new Blob(chunks, { type: mime }), W, H, ext: mime.includes('mp4') ? 'mp4' : 'webm' };
 }
 
 /* ---------------- export: live HTML + Wallpaper Engine ---------------- */
@@ -1846,19 +1864,40 @@ function weProject(s, pal) {
     },
   };
 }
+// Pre-rendered variant: Wallpaper Engine plays the file itself, so only the scheme colour is a property.
+function weVideoProject(s, pal, file) {
+  const p = weProject(s, pal);
+  return Object.assign(p, {
+    file, type: 'video', title: p.title + ' · video',
+    general: { properties: { schemecolor: p.general.properties.schemecolor } },
+  });
+}
 $('#xWe').onclick = () => runJob('Building Wallpaper Engine package…', async j => {
-  const s = state, fps = +$('#wfps').value, enc = new TextEncoder();
-  const html = standaloneHTML(s, fps);
+  const s = state, pal = buildPalette(s), enc = new TextEncoder(), video = weMode.value === 'video';
   const preview = await renderStill(Object.assign({}, s, { caption: false }), 512, 512, view.phase, setProgress);
   if (j.cancelled) throw abortErr();
   const jpg = new Uint8Array(await (await canvasToBlob(preview, 'image/jpeg', 0.9)).arrayBuffer());
-  const zip = makeZip([
-    { name: 'index.html', data: enc.encode(html) },
-    { name: 'project.json', data: enc.encode(JSON.stringify(weProject(s, buildPalette(s)), null, 2)) },
-    { name: 'preview.jpg', data: jpg },
-  ]);
-  download(zip, `${baseName(s)}-wallpaper-engine.zip`);
-  toast('Saved Wallpaper Engine package');
+  let files, msg;
+  if (video) {
+    const [W0, H0] = exportSize(), fps = +$('#vfps').value;
+    const v = await encodeLoop(j, s, W0, H0, fps, true);
+    setBusyMsg('Packing…');
+    const file = `plasma.${v.ext}`;
+    files = [
+      { name: file, data: new Uint8Array(await v.blob.arrayBuffer()) },
+      { name: 'project.json', data: enc.encode(JSON.stringify(weVideoProject(s, pal, file), null, 2)) },
+    ];
+    msg = `Saved Wallpaper Engine video package (${v.W}×${v.H}, ${megabytes(v.blob.size)})`;
+  } else {
+    files = [
+      { name: 'index.html', data: enc.encode(standaloneHTML(s, +$('#wfps').value)) },
+      { name: 'project.json', data: enc.encode(JSON.stringify(weProject(s, pal), null, 2)) },
+    ];
+    msg = 'Saved Wallpaper Engine package';
+  }
+  files.push({ name: 'preview.jpg', data: jpg });
+  download(makeZip(files), `${baseName(s)}-wallpaper-engine${video ? '-video' : ''}.zip`);
+  toast(msg);
 });
 
 /* ---------------- go ---------------- */

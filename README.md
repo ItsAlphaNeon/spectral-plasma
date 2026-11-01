@@ -19,7 +19,8 @@ Each line's wavelength is mapped to its colour on the CIE 1931 spectral locus. A
 |---|---|
 | PNG still | Static wallpaper at any size, including presets for current Mac displays up to 6016×3384 |
 | MP4 loop | Video wallpaper apps. Rendered frame by frame as H.264, and the loop is seamless |
-| Wallpaper Engine | Zip containing `index.html`, `project.json` and a preview. In Wallpaper Engine, choose *Open Wallpaper › Open from File* and pick `index.html` |
+| Wallpaper Engine, pre-rendered video (default) | Zip containing an H.264 `plasma.mp4` loop, `project.json` and a preview. Wallpaper Engine just decodes the video, which is much lighter than the live shader. Unzip it into a folder inside `wallpaper_engine\projects\myprojects` |
+| Wallpaper Engine, live shader | Zip containing `index.html`, `project.json` and a preview, with settings editable in Wallpaper Engine. Choose *Open Wallpaper › Open from File* and pick `index.html` |
 | Live HTML | Web-page wallpaper apps, such as Plash on macOS or Lively on Windows |
 
 ## Settings codes
@@ -40,4 +41,5 @@ The app's own URL hash always holds the current code, so a bookmark saves a look
 
 - The MP4 export loads [mp4-muxer](https://www.npmjs.com/package/mp4-muxer) from jsDelivr the first time. Offline, it falls back to recording in real time.
 - Wavelengths come from the NIST Atomic Spectra Database. Relative intensities are approximate and normalised per element; paste a NIST table for exact values.
-- Live rendering is GPU-heavy. For an always-on wallpaper, lower *Render scale* or the live frame cap.
+- Live rendering is GPU-heavy. For an always-on wallpaper, use a pre-rendered video, or lower *Render scale* and the live frame cap.
+- Pre-rendered videos use the export *Resolution*, *Video frame rate* and *Loop length*. Size them to the screen; 24–30 fps is plenty for slow plasma.
